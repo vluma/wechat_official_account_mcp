@@ -147,8 +147,8 @@ def register_publish_tools() -> List[Tool]:
                         "description": f"数量（列表时使用，取值在{LIST_COUNT_MIN}到{LIST_COUNT_MAX}之间）"
                     },
                     "noContent": {
-                        "type": "integer",
-                        "description": "是否返回content字段（列表时可选，1表示不返回content字段，0表示正常返回，默认为0）"
+                        "type": "boolean",
+                        "description": "是否返回content字段（列表时可选，true表示不返回content字段，false表示正常返回，默认为false）"
                     }
                 },
                 "required": ["action"]
@@ -384,11 +384,11 @@ async def handle_publish_tool(arguments: Dict[str, Any], api_client) -> str:
             if count < LIST_COUNT_MIN or count > LIST_COUNT_MAX:
                 return f"错误：count 参数必须在 {LIST_COUNT_MIN} 到 {LIST_COUNT_MAX} 之间"
             
-            no_content = arguments.get('noContent', 0)
-            if no_content not in [0, 1]:
-                return "错误：noContent 参数必须是 0 或 1"
+            no_content = arguments.get('noContent', False)
+            # 将布尔值转换为整数：True -> 1, False -> 0
+            no_content_int = 1 if no_content else 0
             
-            return await _handle_publish_list(offset, count, no_content, api_client)
+            return await _handle_publish_list(offset, count, no_content_int, api_client)
         
         elif action == 'getarticle':
             article_id = arguments.get('articleId')

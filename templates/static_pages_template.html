@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.bootcdn.net/ajax/libs/blueimp-md5/2.19.0/js/md5.min.js"></script>
+    <title>静态网页列表</title>
+    <style>
+        /* 基本样式 */
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+        
+        /* 模态框样式 */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+        
+        .modal-content {
+            background-color: white;
+            margin: 15% auto;
+            padding: 20px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .modal-header h3 {
+            color: #2c3e50;
+            margin: 0;
+        }
+        
+        .close {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        
+        .close:hover {
+            color: #000;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #2c3e50;
+            font-weight: 500;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+        }
+        
+        .password-input-container {
+            position: relative;
+        }
+        
+        .password-toggle {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #666;
+        }
+        
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+        
+        /* 密码验证状态 */
+        .password-status {
+            margin-top: 10px;
+            padding: 8px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            display: none;
+        }
+        
+        .password-status.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+            display: block;
+        }
+        
+        .password-status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+            display: block;
+        }
+        
+        /* 管理按钮容器 */
+        .admin-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        
+        /* 容器 */
+        .container { max-width: 1200px; margin: 0 auto; }
+        
+        /* 页面头 */
+        .page-header { background: white; padding: 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); display: flex; justify-content: space-between; align-items: center; }
+        .page-header h1 { color: #2c3e50; margin-bottom: 5px; font-size: 1.5rem; }
+        .page-header p { color: #6c757d; font-size: 0.9rem; margin: 0; }
+        
+        /* 页面头布局 */
+        .header-left { flex: 1; text-align: left; }
+        .header-center { flex: 1; text-align: center; padding-top: 35px;}
+        .header-right { flex: 1; text-align: right; }
+        
+        /* 响应式调整 */
+        @media (max-width: 992px) {
+            .page-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 15px;
+            }
+            .header-left, .header-center, .header-right {
+                width: 100%;
+                text-align: left;
+            }
+        }
+        
+        /* 面包屑导航 */
+        .breadcrumb { margin-bottom: 20px; }
+        .breadcrumb a { color: #ffffff; text-decoration: none; }
+        .breadcrumb a:hover { text-decoration: underline; }
+        .breadcrumb span { color: #ffffff; margin: 0 5px; }
+        
+        /* 统计信息 */
+        .stats { margin: 0; padding: 0; border: none; text-align: center; }
+        .stats span { color: #6c757d; font-size: 1rem; }
+        
+        /* 操作栏 */
+        .actions-bar { margin: 0; display: flex; justify-content: flex-end; align-items: center; background: transparent; padding: 0; box-shadow: none; border-radius: 0; }
+        .btn { padding: 10px 20px; border-radius: 6px; font-weight: 500; transition: all 0.2s ease; cursor: pointer; text-decoration: none; display: inline-block; text-align: center; }
+        .btn-primary { background-color: #3498db; color: white; border: none; }
+        .btn-primary:hover { background-color: #2980b9; }
+        .btn-danger { background-color: #e74c3c; color: white; border: none; }
+        .btn-danger:hover { background-color: #c0392b; }
+        .btn-secondary { background-color: #6c757d; color: white; border: none; }
+        .btn-secondary:hover { background-color: #5a6268; }
+        .message { margin-top: 10px; padding: 10px; border-radius: 6px; font-size: 0.9rem; }
+        .message.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .message.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        
+        /* 页面列表 */
+        .pages-container { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 32px rgba(0,0,0,0.1); }
+        .page-item { padding: 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; transition: background-color 0.2s ease; }
+        .page-item:hover { background-color: #f8f9fa; }
+        .page-item:last-child { border-bottom: none; }
+        .page-name { font-size: 1.2rem; font-weight: 600; color: #2c3e50; }
+        .page-meta { color: #6c757d; font-size: 0.9rem; margin-top: 5px; display: flex; gap: 20px; }
+        .page-actions { display: flex; gap: 10px; }
+        .page-link { background-color: #3498db; color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: 500; transition: background-color 0.2s ease; }
+        .page-link:hover { background-color: #2980b9; }
+        .page-delete { background-color: #e74c3c; color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: 500; transition: background-color 0.2s ease; border: none; cursor: pointer; font-size: 14px; }
+        .page-delete:hover { background-color: #c0392b; }
+        
+        /* 分页 */
+        .pagination { display: flex; justify-content: center; align-items: center; gap: 5px; margin-top: 20px; padding: 20px; background: white; border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); flex-wrap: wrap; }
+        .page-btn { padding: 8px 16px; border-radius: 6px; text-decoration: none; color: #3498db; border: 1px solid #ddd; background: white; font-weight: 500; transition: all 0.2s ease; cursor: pointer; }
+        .page-btn:hover:not(.disabled):not(.current) { background-color: #f8f9fa; border-color: #3498db; }
+        .page-btn.current { background-color: #3498db; color: white; border-color: #3498db; }
+        .page-btn.disabled { opacity: 0.5; cursor: not-allowed; }
+        .page-btn.ellipsis { border: none; cursor: default; color: #999; }
+        
+        /* 页码跳转 */
+        .page-jump { display: flex; align-items: center; gap: 8px; margin-left: 10px; padding-left: 10px; border-left: 1px solid #eee; }
+        .jump-input { width: 60px; padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; text-align: center; font-size: 14px; outline: none; transition: border-color 0.2s; }
+        .jump-input:focus { border-color: #3498db; }
+        .jump-btn { padding: 8px 16px; border: none; border-radius: 6px; background-color: #3498db; color: white; font-weight: 500; cursor: pointer; transition: background-color 0.2s; }
+        .jump-btn:hover { background-color: #2980b9; }
+        
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .header-center {display: none;}
+            .page-item { flex-direction: column; align-items: flex-start; gap: 10px; }
+            .page-actions { align-self: flex-end; }
+            .page-meta { flex-direction: column; gap: 5px; }
+            .actions-bar { flex-direction: column; align-items: flex-start; gap: 10px; }
+        }
+        
+        /* 手机端优化 - 按钮只显示图标 */
+        @media (max-width: 600px) {
+            .admin-buttons {
+                display: flex;
+                gap: 5px;
+            }
+            
+            .btn {
+                padding: 8px;
+                width: 36px;
+                height: 36px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 0;
+                line-height: 0;
+                text-indent: -9999px;
+                overflow: hidden;
+            }
+            
+            .btn::before {
+                text-indent: 0;
+                font-size: 16px;
+                line-height: 1;
+            }
+            
+            .btn-primary::before {
+                content: '🗘';
+            }
+            
+            .btn-secondary::before {
+                content: '⚙️';
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 面包屑导航 -->
+        <div class="breadcrumb">
+            <a href="{{ context_path }}/">首页</a>
+            <span>></span>
+            <span>静态网页列表</span>
+        </div>
+        
+        <!-- 页面头容器，包含页面头、统计信息和操作栏 -->
+        <div class="page-header">
+            <div class="header-left">
+                <h1>📂 静态网页列表</h1>
+                <p>浏览和管理所有生成的静态HTML网页</p>
+            </div>
+            
+            <!-- 统计信息 -->
+            <div class="header-center">
+                <div class="stats">
+                    <span>共 {{ total_files }} 个文件，总大小：{{ total_size }}</span>
+                </div>
+            </div>
+            
+            <!-- 操作栏 -->
+            <div class="header-right">
+                <div class="actions-bar">
+                    <div class="admin-buttons">
+                        <button class="btn btn-primary" onclick="refreshFileList()">🗘 刷新</button>
+                        <button id="adminButton" class="btn btn-secondary" onclick="openPasswordModal()">⚙️ 管理</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 密码验证模态框 -->
+        <div id="passwordModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>🔐 管理员密码验证</h3>
+                    <span class="close" onclick="closePasswordModal()">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="adminPassword">请输入管理密码：</label>
+                        <div class="password-input-container">
+                            <input type="password" id="adminPassword" placeholder="输入管理密码">
+                            <button class="password-toggle" onclick="togglePasswordVisibility()" title="显示/隐藏密码">👁️</button>
+                        </div>
+                    </div>
+                    <div id="passwordStatus" class="password-status"></div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="closePasswordModal()">取消</button>
+                    <button class="btn btn-primary" onclick="verifyPassword()">验证</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 消息提示 -->
+        <div id="message" class="message" style="display: none;"></div>
+        
+        <!-- 页面列表 -->
+        {% if pages_info %}
+            <div class="pages-container">
+                {% for page in pages_info %}
+                <div class="page-item">
+                    <div>
+                        <div class="page-name">{{ page.filename }}</div>
+                        <div class="page-meta">
+                            <span>创建时间: {{ page.created_at }}</span>
+                            <span>文件大小: {{ page.file_size_formatted }}</span>
+                        </div>
+                    </div>
+                    <div class="page-actions">
+                        <a href="{{ context_path }}/pages/{{ page.filename }}" class="page-link" target="_blank">访问页面</a>
+                        <button class="page-delete" onclick="deleteFile('{{ page.filename }}')">删除</button>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div style="text-align: center; color: #999; padding: 40px; background: white; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.1);">暂无静态网页</div>
+        {% endif %}
+        
+        <!-- 分页 -->
+        {% if pagination_html %}
+            {{ pagination_html }}
+        {% endif %}
+    </div>
+    
+    <script>
+        // 密码验证状态
+        let passwordValidated = false;
+        // 保存加密信息供后续使用
+        let savedEncryptedPassword = null;
+        let savedSalt = null;
+        
+        // 从 localStorage 恢复验证状态（7天有效）
+        function loadPasswordValidation() {
+            try {
+                const stored = localStorage.getItem('passwordValidation');
+                if (stored) {
+                    const data = JSON.parse(stored);
+                    const now = Date.now();
+                    // 检查是否过期（7天 = 7 * 24 * 60 * 60 * 1000毫秒）
+                    if (data.expiresAt && data.expiresAt > now) {
+                        savedEncryptedPassword = data.encryptedPassword;
+                        savedSalt = data.salt;
+                        passwordValidated = true;
+                        showDeleteButtons();
+                        console.log('已从本地存储恢复密码验证状态');
+                    } else {
+                        // 已过期，清除存储并隐藏删除按钮
+                        localStorage.removeItem('passwordValidation');
+                        hideDeleteButtons();
+                        console.log('密码验证已过期');
+                    }
+                } else {
+                    // 没有存储的验证状态，隐藏删除按钮
+                    hideDeleteButtons();
+                    console.log('没有找到存储的密码验证状态');
+                }
+            } catch (e) {
+                console.error('加载密码验证状态失败:', e);
+                hideDeleteButtons();
+            }
+        }
+        
+        // 保存密码验证状态到 localStorage
+        function savePasswordValidation(encryptedPassword, salt) {
+            try {
+                const expiresAt = Date.now() + (7 * 24 * 60 * 60 * 1000); // 7天后过期
+                const data = {
+                    encryptedPassword: encryptedPassword,
+                    salt: salt,
+                    expiresAt: expiresAt
+                };
+                localStorage.setItem('passwordValidation', JSON.stringify(data));
+                console.log('密码验证状态已保存');
+            } catch (e) {
+                console.error('保存密码验证状态失败:', e);
+            }
+        }
+        
+        // 清除密码验证状态
+        function clearPasswordValidation() {
+            passwordValidated = false;
+            savedEncryptedPassword = null;
+            savedSalt = null;
+            localStorage.removeItem('passwordValidation');
+            hideDeleteButtons();
+        }
+        
+        // 生成随机盐
+        function generateSalt() {
+            const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+            let salt = '';
+            for (let i = 0; i < 16; i++) {
+                salt += charset.charAt(Math.floor(Math.random() * charset.length));
+            }
+            return salt;
+        }
+        
+        // 页面加载时恢复验证状态
+        document.addEventListener('DOMContentLoaded', function() {
+            loadPasswordValidation();
+        });
+        
+        // 刷新文件列表
+        function refreshFileList() {
+            showMessage('正在刷新文件列表...', 'success');
+            window.location.reload();
+        }
+        
+        // 打开密码验证模态框
+        function openPasswordModal() {
+            document.getElementById('passwordModal').style.display = 'block';
+            document.getElementById('adminPassword').focus();
+        }
+        
+        // 关闭密码验证模态框
+        function closePasswordModal() {
+            document.getElementById('passwordModal').style.display = 'none';
+            document.getElementById('adminPassword').value = '';
+            document.getElementById('passwordStatus').style.display = 'none';
+        }
+        
+        // 点击模态框外部关闭
+        window.onclick = function(event) {
+            const modal = document.getElementById('passwordModal');
+            if (event.target == modal) {
+                closePasswordModal();
+            }
+        }
+        
+        // 密码可见性切换
+        function togglePasswordVisibility() {
+            const input = document.getElementById('adminPassword');
+            const button = input.nextElementSibling;
+            
+            if (input.type === 'password') {
+                input.type = 'text';
+                button.textContent = '🙈';
+            } else {
+                input.type = 'password';
+                button.textContent = '👁️';
+            }
+        }
+        
+        // 验证管理密码
+        async function verifyPassword() {
+            const passwordInput = document.getElementById('adminPassword');
+            const password = passwordInput.value.trim();
+            const statusDiv = document.getElementById('passwordStatus');
+            
+            if (!password) {
+                statusDiv.textContent = '请输入管理密码';
+                statusDiv.className = 'password-status error';
+                return;
+            }
+            
+            try {
+                // 生成盐并使用 md5+salt 加密密码
+                const salt = generateSalt();
+                const encryptedPassword = md5(password + salt);
+                
+                const response = await fetch('{{ context_path }}/api/validate-password', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ password: `${encryptedPassword}:${salt}` })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    passwordValidated = true;
+                    // 保存加密信息供后续使用
+                    savedEncryptedPassword = encryptedPassword;
+                    savedSalt = salt;
+                    // 保存到 localStorage（7天有效）
+                    savePasswordValidation(encryptedPassword, salt);
+                    statusDiv.textContent = '密码验证成功！';
+                    statusDiv.className = 'password-status success';
+                    
+                    // 关闭模态框
+                    setTimeout(() => {
+                        closePasswordModal();
+                        // 显示所有删除按钮
+                        showDeleteButtons();
+                    }, 1000);
+                } else {
+                    statusDiv.textContent = '管理密码错误，请重试';
+                    statusDiv.className = 'password-status error';
+                    passwordInput.value = '';
+                    passwordInput.focus();
+                }
+            } catch (error) {
+                console.error('密码验证失败:', error);
+                statusDiv.textContent = '密码验证失败，请检查网络连接';
+                statusDiv.className = 'password-status error';
+            }
+        }
+        
+        // 显示删除按钮
+        function showDeleteButtons() {
+            const deleteButtons = document.querySelectorAll('.page-delete');
+            deleteButtons.forEach(button => {
+                button.style.display = 'inline-block';
+            });
+            // 更新管理按钮为退出按钮
+            const adminButton = document.getElementById('adminButton');
+            if (adminButton) {
+                adminButton.textContent = '🚪 退出';
+                adminButton.onclick = clearPasswordValidation;
+                adminButton.className = 'btn btn-danger';
+            }
+        }
+        
+        // 隐藏删除按钮（初始状态）
+        function hideDeleteButtons() {
+            const deleteButtons = document.querySelectorAll('.page-delete');
+            deleteButtons.forEach(button => {
+                button.style.display = 'none';
+            });
+            // 更新退出按钮为管理按钮
+            const adminButton = document.getElementById('adminButton');
+            if (adminButton) {
+                adminButton.textContent = '⚙️ 管理';
+                adminButton.onclick = openPasswordModal;
+                adminButton.className = 'btn btn-secondary';
+            }
+        }
+        
+        // 删除文件
+        async function deleteFile(filename) {
+            if (!passwordValidated) {
+                openPasswordModal();
+                return;
+            }
+            
+            if (confirm(`确定要删除文件 "${filename}" 吗？此操作不可恢复。`)) {
+                showMessage(`正在删除文件 ${filename}...`, 'success');
+                
+                // 使用保存的加密信息（复用验证时的salt和md5）
+                if (!savedEncryptedPassword || !savedSalt) {
+                    // 如果没有保存的信息，提示用户重新验证
+                    showMessage('需要重新验证密码', 'error');
+                    passwordValidated = false;
+                    openPasswordModal();
+                    return;
+                }
+                
+                // 发送删除请求，使用保存的加密信息
+                fetch(`{{ context_path }}/api/static-page/delete?filename=${encodeURIComponent(filename)}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Config-Password': `${savedEncryptedPassword}:${savedSalt}`
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showMessage(`文件 ${filename} 删除成功！`, 'success');
+                        // 刷新页面
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 1000);
+                    } else {
+                        showMessage(`删除失败: ${data.error || '未知错误'}`, 'error');
+                    }
+                })
+                .catch(error => {
+                    showMessage(`删除失败: ${error.message}`, 'error');
+                });
+            }
+        }
+        
+        // 显示消息
+        function showMessage(message, type) {
+            const messageDiv = document.getElementById('message');
+            messageDiv.textContent = message;
+            messageDiv.className = `message ${type}`;
+            messageDiv.style.display = 'block';
+            
+            // 3秒后自动隐藏
+            setTimeout(() => {
+                messageDiv.style.display = 'none';
+            }, 3000);
+        }
+    </script>
+</body>
+</html>

@@ -5,11 +5,12 @@ import os
 import json
 import time
 import logging
-import aiohttp
+import httpx
 from pathlib import Path
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+BASE_URL = os.getenv('WECHAT_OFFICIAL_API_URL', 'https://api.weixin.qq.com')
 
 
 class AuthManager:
@@ -157,31 +158,31 @@ class AuthManager:
         app_id = self.config['app_id']
         app_secret = self.config['app_secret']
         
-        url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={app_id}&secret={app_secret}"
+        url = f"{BASE_URL}/cgi-bin/token?grant_type=client_credential&appid={app_id}&secret={app_secret}"
         
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
-                    data = await response.json()
+            async with httpx.AsyncClient() as session:
+                response = await session.get(url)
+                data = response.json()
+                
+                if 'access_token' in data:
+                    # 计算过期时间（微信 token 有效期 7200 秒）
+                    expires_in = data.get('expires_in', 7200)
+                    expires_at = int(time.time() * 1000) + expires_in * 1000
                     
-                    if 'access_token' in data:
-                        # 计算过期时间（微信 token 有效期 7200 秒）
-                        expires_in = data.get('expires_in', 7200)
-                        expires_at = int(time.time() * 1000) + expires_in * 1000
-                        
-                        self.token_cache = {
-                            'accessToken': data['access_token'],
-                            'expiresAt': expires_at
-                        }
-                        self._save_config()
-                        logger.info("Access Token 获取成功")
-                        return self.token_cache
-                    else:
-                        error_msg = data.get('errmsg', '未知错误')
-                        error_code = data.get('errcode', -1)
-                        raise Exception(f"获取 Access Token 失败: {error_code} - {error_msg}")
+                    self.token_cache = {
+                        'accessToken': data['access_token'],
+                        'expiresAt': expires_at
+                    }
+                    self._save_config()
+                    logger.info("Access Token 获取成功")
+                    return self.token_cache
+                else:
+                    error_msg = data.get('errmsg', '未知错误')
+                    error_code = data.get('errcode', -1)
+                    raise Exception(f"获取 Access Token 失败: {error_code} - {error_msg}")
         
-        except aiohttp.ClientError as e:
+        except httpx.RequestError as e:
             raise Exception(f"网络请求失败: {str(e)}")
         except Exception as e:
             logger.error(f"刷新 Access Token 失败: {e}")

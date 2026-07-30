@@ -3,16 +3,16 @@
 """
 import json
 import logging
+import os
 import re
-import aiohttp
-import requests
+import httpx
 from typing import Dict, Any, Optional, List, Union
 from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
 # 常量定义
-BASE_URL = "https://api.weixin.qq.com"
+BASE_URL = os.getenv('WECHAT_OFFICIAL_API_URL', 'https://api.weixin.qq.com')
 MAX_IMAGE_SIZE = 1024 * 1024  # 1MB
 JPEG_HEADER = bytes([0xFF, 0xD8, 0xFF])
 PNG_HEADER = bytes([0x89, 0x50, 0x4E, 0x47])
@@ -92,10 +92,10 @@ class WechatApiClient:
         url = self._build_url(endpoint)
         
         try:
-            async with aiohttp.ClientSession() as session:
+            async with httpx.AsyncClient() as session:
                 if method.upper() == 'GET':
-                    async with session.get(url, params=data) as response:
-                        result = await self._parse_response(response)
+                    response = await session.get(url, params=data)
+                    result = await self._parse_response(response)
                 elif method.upper() == 'POST':
                     if files:
                         result = await self._post_with_files(session, url, data, files)
@@ -114,39 +114,38 @@ class WechatApiClient:
         
         except WechatApiError:
             raise
-        except aiohttp.ClientError as e:
+        except httpx.RequestError as e:
             raise Exception(f"网络请求失败: {str(e)}")
     
-    async def _post_with_files(self, session: aiohttp.ClientSession, url: str,
+    async def _post_with_files(self, session: httpx.AsyncClient, url: str,
                                data: Optional[Dict[str, Any]], files: Dict[str, Any]) -> Dict[str, Any]:
         """POST 请求（带文件）"""
-        form_data = aiohttp.FormData()
-        for key, value in (data or {}).items():
-            form_data.add_field(key, str(value))
+        # 准备表单数据
+        form_data = data or {}
+        # 准备文件数据
+        file_data = {}
         for key, (content, filename) in files.items():
-            form_data.add_field(key, content, filename=filename)
+            file_data[key] = (filename, content)
         
-        async with session.post(url, data=form_data) as response:
-            return await self._parse_response(response)
+        response = await session.post(url, data=form_data, files=file_data)
+        return await self._parse_response(response)
     
-    async def _post_json(self, session: aiohttp.ClientSession, url: str,
+    async def _post_json(self, session: httpx.AsyncClient, url: str,
                         data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """POST 请求（JSON 数据）"""
         if data:
-            json_data = json.dumps(data, ensure_ascii=False)
-            headers = {'Content-Type': 'application/json; charset=utf-8'}
-            async with session.post(url, data=json_data.encode('utf-8'), headers=headers) as response:
-                return await self._parse_response(response)
+            response = await session.post(url, json=data)
+            return await self._parse_response(response)
         else:
-            async with session.post(url) as response:
-                return await self._parse_response(response)
+            response = await session.post(url)
+            return await self._parse_response(response)
     
-    async def _parse_response(self, response: aiohttp.ClientResponse) -> Dict[str, Any]:
+    async def _parse_response(self, response: httpx.Response) -> Dict[str, Any]:
         """
         解析HTTP响应
         
         Args:
-            response: aiohttp响应对象
+            response: httpx响应对象
             
         Returns:
             解析后的JSON数据
@@ -154,7 +153,7 @@ class WechatApiClient:
         Raises:
             Exception: 解析失败时
         """
-        text = await response.text()
+        text = response.text
         
         try:
             return json.loads(text)
@@ -244,9 +243,10 @@ class WechatApiClient:
         """
         url = f"{self.BASE_URL}/cgi-bin/media/upload?access_token={self.access_token}&type={media_type}"
         
-        # 使用 requests 处理文件上传（aiohttp 的文件上传较复杂）
-        response = requests.post(url, files={'media': (filename, file_content)})
-        result = response.json()
+        # 使用 httpx.AsyncClient 处理异步文件上传
+        async with httpx.AsyncClient() as session:
+            response = await session.post(url, files={'media': (filename, file_content)})
+            result = response.json()
         
         if 'errcode' in result and result['errcode'] != 0:
             error_msg = result.get('errmsg', '未知错误')
@@ -266,16 +266,17 @@ class WechatApiClient:
         """
         url = f"{self.BASE_URL}/cgi-bin/media/get?access_token={self.access_token}&media_id={media_id}"
         
-        response = requests.get(url)
-        content_type = response.headers.get('Content-Type', '')
-        
-        if 'application/json' in content_type:
-            result = response.json()
-            if 'errcode' in result:
-                error_msg = result.get('errmsg', '未知错误')
-                error_code = result.get('errcode', -1)
-                raise WechatApiError(error_code, error_msg)
-        return response.content
+        async with httpx.AsyncClient() as session:
+            response = await session.get(url)
+            content_type = response.headers.get('Content-Type', '')
+            
+            if 'application/json' in content_type:
+                result = response.json()
+                if 'errcode' in result:
+                    error_msg = result.get('errmsg', '未知错误')
+                    error_code = result.get('errcode', -1)
+                    raise WechatApiError(error_code, error_msg)
+            return response.content
     
     async def upload_permanent_media(self, media_type: str, file_content: bytes, 
                                     title: Optional[str] = None, 
@@ -336,8 +337,9 @@ class WechatApiClient:
                 'introduction': introduction or ''
             }, ensure_ascii=False)
         
-        response = requests.post(url, files=files, data=data)
-        result = response.json()
+        async with httpx.AsyncClient() as session:
+            response = await session.post(url, files=files, data=data)
+            result = response.json()
         
         if 'errcode' in result and result['errcode'] != 0:
             error_msg = result.get('errmsg', '未知错误')
@@ -358,18 +360,18 @@ class WechatApiClient:
         """
         url = f"{self.BASE_URL}/cgi-bin/material/get_material?access_token={self.access_token}"
         
-        response = requests.post(url, json={'media_id': media_id})
-        content_type = response.headers.get('Content-Type', '')
-        
-        if 'application/json' in content_type:
-            result = response.json()
-            if 'errcode' in result:
-                error_msg = result.get('errmsg', '未知错误')
-                error_code = result.get('errcode', -1)
-                raise WechatApiError(error_code, error_msg)
-            return result
-        
-        return response.content
+        async with httpx.AsyncClient() as session:
+            response = await session.post(url, json={'media_id': media_id})
+            content_type = response.headers.get('Content-Type', '')
+            
+            if 'application/json' in content_type:
+                result = response.json()
+                if 'errcode' in result:
+                    error_msg = result.get('errmsg', '未知错误')
+                    error_code = result.get('errcode', -1)
+                    raise WechatApiError(error_code, error_msg)
+            
+            return response.content
     
     async def delete_permanent_media(self, media_id: str) -> Dict[str, Any]:
         """
@@ -409,8 +411,9 @@ class WechatApiClient:
         url = f"{self.BASE_URL}/cgi-bin/media/uploadimg?access_token={self.access_token}"
         files = {'media': (f'image.{ext}', file_content, f'image/{ext}')}
         
-        response = requests.post(url, files=files)
-        result = response.json()
+        async with httpx.AsyncClient() as session:
+            response = await session.post(url, files=files)
+            result = response.json()
         
         if 'errcode' in result and result['errcode'] != 0:
             error_msg = result.get('errmsg', '未知错误')
@@ -508,18 +511,18 @@ class WechatApiClient:
             params['checkonly'] = '1'
         
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, params=params) as response:
-                    result = await self._parse_response(response)
-                    
-                    if 'errcode' in result and result['errcode'] != 0:
-                        error_msg = result.get('errmsg', '未知错误')
-                        error_code = result.get('errcode', -1)
-                        raise WechatApiError(error_code, error_msg)
-                    
-                    return result
+            async with httpx.AsyncClient() as session:
+                response = await session.post(url, params=params)
+                result = await self._parse_response(response)
+                
+                if 'errcode' in result and result['errcode'] != 0:
+                    error_msg = result.get('errmsg', '未知错误')
+                    error_code = result.get('errcode', -1)
+                    raise WechatApiError(error_code, error_msg)
+                
+                return result
         
         except WechatApiError:
             raise
-        except aiohttp.ClientError as e:
+        except httpx.RequestError as e:
             raise Exception(f"网络请求失败: {str(e)}")
