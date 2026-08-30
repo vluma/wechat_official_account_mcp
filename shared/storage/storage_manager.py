@@ -46,21 +46,47 @@ class StorageManager:
             'wechat_messages': [],  # 微信消息列表
             'user_verification_codes': []  # 用户验证码列表
         }
-        
+
         # 初始化S3相关配置
         self._init_s3_config()
-        
+
         # 加载数据
         self._load_data()
-        
+
         # 启动定时同步（如果配置了）
         self._start_scheduled_sync()
-        
+
         # 启动验证码清理定时任务（如果配置了）
         self._start_verification_code_cleanup()
-        
+
         # 标记为已初始化
         self._initialized = True
+
+    # 所有必需的顶层 schema 键 + 默认值。新增数据集合时只需改这里一处，
+    # 可同时被 __init__ 默认、_load_data fallback、defensive ensure 三处复用。
+    _DEFAULT_SCHEMA: Dict[str, Any] = {
+        'media': [],
+        'static_pages': [],
+        'wechat_messages': [],
+        'user_verification_codes': [],
+    }
+
+    def _ensure_data_schema(self) -> None:
+        """
+        确保 self.data 存在，且包含所有必需顶层集合字段。
+
+        本方法是幂等的：即使 self.data 因 S3 部分同步 / 文件损坏 fallback /
+        老版本 JSON 缺字段而残缺，也会补齐缺失键并保证每个字段是正确类型。
+        任何新老集合都应该使用这里做兜底，而不是在业务代码里写 `self.data[key]` 直接索引。
+        """
+        if not isinstance(self.data, dict):
+            self.data = {}
+        for k, default in self._DEFAULT_SCHEMA.items():
+            cur = self.data.get(k)
+            if cur is None or not isinstance(cur, list):
+                # 类型不一致时兜底用空列表；不覆盖其它已有合法内容
+                self.data[k] = list(default) if isinstance(default, list) else default
+
     
     def _init_s3_config(self):
         """初始化S3相关配置"""
@@ -167,24 +193,25 @@ class StorageManager:
         """加载数据"""
         db_dir = Path(self.db_file).parent
         db_dir.mkdir(parents=True, exist_ok=True)
-        
+
         if os.path.exists(self.db_file):
             try:
                 with open(self.db_file, 'r', encoding='utf-8') as f:
-                    self.data = json.load(f)
-                if 'media' not in self.data:
-                    self.data['media'] = []
-                if 'static_pages' not in self.data:
-                    self.data['static_pages'] = []
-                if 'wechat_messages' not in self.data:
-                    self.data['wechat_messages'] = []
-                if 'user_verification_codes' not in self.data:
-                    self.data['user_verification_codes'] = []
+                    loaded = json.load(f)
+                # 要求顶层是 dict；否则视为损坏，走 except 同等的 fallback
+                if not isinstance(loaded, dict):
+                    raise ValueError(f"storage JSON 顶层不是 dict（类型={type(loaded).__name__}）")
+                self.data = loaded
             except Exception as e:
                 logger.error(f"加载存储数据失败: {e}")
-                self.data = {'media': [], 'static_pages': []}
+                self.data = {k: list(v) if isinstance(v, list) else v
+                             for k, v in self._DEFAULT_SCHEMA.items()}
         else:
-            self.data = {'media': [], 'static_pages': []}
+            self.data = {k: list(v) if isinstance(v, list) else v
+                         for k, v in self._DEFAULT_SCHEMA.items()}
+
+        # 无论以上哪个分支，最后统一防御性补齐所有必需集合键、修正异常类型
+        self._ensure_data_schema()
     
     def _save_data(self):
         """
@@ -874,7 +901,7 @@ class StorageManager:
     def save_verification_code(self, code_info: Dict[str, Any]):
         """
         保存用户验证码信息
-        
+
         Args:
             code_info: 验证码信息字典，包含 code, created_at, expires_at, used, source 等
         """
@@ -882,64 +909,75 @@ class StorageManager:
         if not code:
             logger.warning("验证码信息缺少 code，跳过保存")
             return
-        
+
+        # 先从磁盘重读到最新内容（与 get/list 保持一致），并做 schema 防御
+        self._load_data()
+        self._ensure_data_schema()
+        codes = self.data.setdefault('user_verification_codes', [])
+
         # 检查是否已存在
         existing_index = None
-        for i, existing_code in enumerate(self.data['user_verification_codes']):
-            if existing_code.get('code') == code:
+        for i, existing_code in enumerate(codes):
+            if existing_code and existing_code.get('code') == code:
                 existing_index = i
                 break
-        
+
         if existing_index is not None:
             # 更新现有记录
-            self.data['user_verification_codes'][existing_index].update(code_info)
+            codes[existing_index].update(code_info)
             logger.info(f"更新验证码信息: {code}")
         else:
             # 添加新记录
-            self.data['user_verification_codes'].append(code_info)
+            codes.append(code_info)
             logger.info(f"保存验证码信息: {code}")
-        
+
         self._save_data()
 
     def get_verification_code(self, code: str) -> Optional[Dict[str, Any]]:
         """
         获取验证码信息
-        
+
         Args:
             code: 验证码字符串
-            
+
         Returns:
             验证码信息字典，如果不存在则返回 None
         """
         # 每次都重新从文件加载数据，确保获取最新内容
         self._load_data()
+        self._ensure_data_schema()
         for code_info in self.data['user_verification_codes']:
-            if code_info.get('code') == code:
+            if isinstance(code_info, dict) and code_info.get('code') == code:
                 return code_info
         return None
 
     def list_verification_codes(self, only_valid: bool = False) -> List[Dict[str, Any]]:
         """
         列出用户验证码
-        
+
         Args:
             only_valid: 是否只返回有效的验证码
-            
+
         Returns:
             验证码列表
         """
         # 每次都重新从文件加载数据，确保获取最新内容
         self._load_data()
-        
+        self._ensure_data_schema()
+        codes = self.data['user_verification_codes']
+
         if not only_valid:
-            return self.data['user_verification_codes'].copy()
-        
+            # 过滤掉非字典脏数据，避免下游 TypeError
+            return [c for c in codes if isinstance(c, dict)].copy()
+
         # 只返回有效的验证码
         from datetime import datetime
         valid_codes = []
         now = datetime.now()
-        
-        for code_info in self.data['user_verification_codes']:
+
+        for code_info in codes:
+            if not isinstance(code_info, dict):
+                continue
             # 检查是否过期
             try:
                 expires_at = datetime.fromisoformat(code_info.get('expires_at', ''))
@@ -948,22 +986,25 @@ class StorageManager:
             except (ValueError, TypeError):
                 # 如果时间格式错误，跳过该记录
                 continue
-        
+
         return valid_codes
 
     def delete_verification_code(self, code: str) -> bool:
         """
         删除验证码信息
-        
+
         Args:
             code: 验证码字符串
-            
+
         Returns:
             是否删除成功
         """
-        for i, code_info in enumerate(self.data['user_verification_codes']):
-            if code_info.get('code') == code:
-                del self.data['user_verification_codes'][i]
+        self._load_data()
+        self._ensure_data_schema()
+        codes = self.data['user_verification_codes']
+        for i, code_info in enumerate(codes):
+            if isinstance(code_info, dict) and code_info.get('code') == code:
+                del codes[i]
                 self._save_data()
                 logger.info(f"删除验证码: {code}")
                 return True
@@ -972,17 +1013,20 @@ class StorageManager:
     def mark_verification_code_used(self, code: str) -> bool:
         """
         标记验证码为已使用
-        
+
         Args:
             code: 验证码字符串
-            
+
         Returns:
             是否标记成功
         """
-        for i, code_info in enumerate(self.data['user_verification_codes']):
-            if code_info.get('code') == code:
-                self.data['user_verification_codes'][i]['used'] = True
-                self.data['user_verification_codes'][i]['used_at'] = datetime.now().isoformat()
+        self._load_data()
+        self._ensure_data_schema()
+        codes = self.data['user_verification_codes']
+        for i, code_info in enumerate(codes):
+            if isinstance(code_info, dict) and code_info.get('code') == code:
+                codes[i]['used'] = True
+                codes[i]['used_at'] = datetime.now().isoformat()
                 self._save_data()
                 logger.info(f"标记验证码已使用: {code}")
                 return True
@@ -991,73 +1035,83 @@ class StorageManager:
     def cleanup_expired_verification_codes(self) -> int:
         """
         清理过期的验证码
-        
+
         Returns:
             删除的验证码数量
         """
         from datetime import datetime
-        
-        # 每次都重新从文件加载数据，确保获取最新内容
+
+        # 一次重读 + schema 防御；后续不再走 delete_* 的独立 _load_data 分支，
+        # 避免 N 次磁盘 IO 导致读到过期快照覆盖前面的内存修改
         self._load_data()
-        
+        self._ensure_data_schema()
+
         now = datetime.now()
-        expired_codes = []
-        
-        # 找出过期的验证码
-        for code_info in self.data['user_verification_codes']:
+        codes = self.data['user_verification_codes']
+        kept: List[Any] = []
+        expired_count = 0
+        for code_info in codes:
+            if not isinstance(code_info, dict):
+                # 非字典脏数据也视为过期清理
+                expired_count += 1
+                continue
             try:
                 expires_at = datetime.fromisoformat(code_info.get('expires_at', ''))
-                if now > expires_at:
-                    expired_codes.append(code_info.get('code'))
+                is_expired = now > expires_at
             except (ValueError, TypeError):
-                # 如果时间格式错误，也标记为过期
-                expired_codes.append(code_info.get('code'))
-        
-        # 删除过期的验证码
-        cleaned_count = 0
-        for code in expired_codes:
-            if self.delete_verification_code(code):
-                cleaned_count += 1
-        
-        if cleaned_count > 0:
+                # 时间格式错误也标记为过期
+                is_expired = True
+            if is_expired:
+                expired_count += 1
+            else:
+                kept.append(code_info)
+
+        if expired_count > 0:
+            self.data['user_verification_codes'] = kept
             self._save_data()
-            logger.info(f"清理了 {cleaned_count} 个过期验证码")
-        
-        return cleaned_count
-    
+            logger.info(f"清理了 {expired_count} 个过期/脏数据验证码")
+
+        return expired_count
+
     def get_verification_code_valid_days(self) -> int:
         """
         获取验证码有效天数配置
-        
+
         Returns:
             有效天数，默认90天
         """
         return int(os.getenv('OPENAI_VERIFICATION_CODE_VALID_DAYS', '90'))
-    
+
     def get_verification_code_stats(self) -> Dict[str, Any]:
         """
         获取验证码统计信息
-        
+
         Returns:
             包含总数量、有效数量、已使用数量、过期数量的字典
         """
         # 每次都重新从文件加载数据，确保获取最新内容
         self._load_data()
-        
+        self._ensure_data_schema()
+
         from datetime import datetime
         now = datetime.now()
-        
-        total_count = len(self.data['user_verification_codes'])
+
+        codes = self.data['user_verification_codes']
+        total_count = len(codes)
         valid_count = 0
         used_count = 0
         expired_count = 0
-        
-        for code_info in self.data['user_verification_codes']:
+
+        for code_info in codes:
+            if not isinstance(code_info, dict):
+                # 脏数据计入过期，避免影响统计
+                expired_count += 1
+                continue
             # 检查是否已使用
             if code_info.get('used', False):
                 used_count += 1
                 continue
-            
+
             # 检查是否过期
             try:
                 expires_at = datetime.fromisoformat(code_info.get('expires_at', ''))
@@ -1068,7 +1122,7 @@ class StorageManager:
             except (ValueError, TypeError):
                 # 如果时间格式错误，计入过期
                 expired_count += 1
-        
+
         return {
             'total_count': total_count,
             'valid_count': valid_count,
