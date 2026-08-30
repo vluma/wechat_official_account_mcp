@@ -1004,6 +1004,47 @@ class StaticPageServer:
             logger.error(f"处理微信验证失败: {e}")
             return "Internal server error", 500
     
+    @staticmethod
+    def normalize_conversation_history(raw_history):
+        """把前端聊天历史统一转换成 AI 服务需要的 List[{'role','content'}] 格式。
+
+        兼容两种输入：
+          - 前端 chatHistory 原生格式：{'content': ..., 'sender': 'user'|'assistant', ...}
+          - 标准 OpenAI 格式：    {'role': 'user'|'assistant'|'system', 'content': ...}
+
+        过滤规则：
+          - 非 dict 项、缺少 role/sender 或 content 为 None / 空字符串 → 跳过并记录日志
+          - role 未知值（sender 既非 user 也非 assistant 且没有 role）→ 跳过
+        """
+        result = []
+        if not isinstance(raw_history, list):
+            return result
+        for idx, item in enumerate(raw_history):
+            if not isinstance(item, dict):
+                logger.warning(f"对话历史第 {idx} 项格式非 dict，已跳过: {type(item).__name__}")
+                continue
+            # 1. 决定 role（优先已有的 role，否则由 sender 推导）
+            role = item.get('role')
+            if not role:
+                sender = item.get('sender')
+                if sender == 'assistant':
+                    role = 'assistant'
+                elif sender == 'user':
+                    role = 'user'
+                else:
+                    logger.warning(f"对话历史第 {idx} 项缺少 role/sender 或值非法，已跳过: sender={sender!r}")
+                    continue
+            # 2. content 必填 & 非空白字符串
+            content = item.get('content')
+            if content is None:
+                logger.warning(f"对话历史第 {idx} 项缺少 content，已跳过")
+                continue
+            if isinstance(content, str) and not content.strip():
+                logger.debug(f"对话历史第 {idx} 项 content 为空字符串，已跳过")
+                continue
+            result.append({'role': role, 'content': str(content)})
+        return result
+
     def _handle_chat_api(self):
         """处理聊天API请求"""
         import time
@@ -1020,8 +1061,10 @@ class StaticPageServer:
             if not user_message:
                 return json.dumps({'error': '请提供消息内容'}), 400, {'Content-Type': 'application/json'}
             
-            # 获取对话历史（可选）
-            conversation_history = data.get('history', [])
+            # 获取对话历史（兼容 context / history 两种字段名）
+            # 并把前端的 {content, sender, ...} 格式转换成 AI 服务需要的 {role, content} 格式
+            raw_history = data.get('history') or data.get('context') or []
+            conversation_history = self.normalize_conversation_history(raw_history)
             
             # 从环境变量读取交互模式
             interaction_mode = os.getenv('OPENAI_INTERACTION_MODE', 'block').strip().lower()

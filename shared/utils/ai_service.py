@@ -39,7 +39,16 @@ class AIService:
             self.api_url = os.getenv(f'{prefix}API_URL') or os.getenv('OPENAI_API_URL') 
             self.api_key = os.getenv(f'{prefix}API_KEY') or os.getenv('OPENAI_API_KEY') 
             self.model = os.getenv(f'{prefix}MODEL') or os.getenv('OPENAI_MODEL') 
-            self.system_prompt = os.getenv(f'{prefix}PROMPT') or os.getenv('OPENAI_PROMPT') 
+            # 环境变量为空或仅空白时，视为未设置，不使用默认值
+            # 先尝试 OPENAI_WECHAT_PROMPT，若无效回退到通用 OPENAI_PROMPT；都无效则 None
+            wechat_prompt = os.getenv(f'{prefix}PROMPT')
+            fallback_prompt = os.getenv('OPENAI_PROMPT')
+            if wechat_prompt and wechat_prompt.strip():
+                self.system_prompt = wechat_prompt.strip()
+            elif fallback_prompt and fallback_prompt.strip():
+                self.system_prompt = fallback_prompt.strip()
+            else:
+                self.system_prompt = None
             
             # 公众号问答专用参数
             self.max_tokens = int(os.getenv(f'{prefix}MAX_TOKENS', '4096'))
@@ -51,7 +60,16 @@ class AIService:
             self.api_url = api_url or os.getenv(f'{prefix}API_URL')
             self.api_key = api_key or os.getenv(f'{prefix}API_KEY')
             self.model = model or os.getenv(f'{prefix}MODEL')
-            self.system_prompt = system_prompt or os.getenv(f'{prefix}PROMPT')
+            # 参数或环境变量为空或仅空白时，视为未设置，不使用默认值
+            # 优先级：入参 system_prompt > 环境变量 OPENAI_PROMPT；都无效则 None
+            if system_prompt and system_prompt.strip():
+                self.system_prompt = system_prompt.strip()
+            else:
+                env_prompt = os.getenv(f'{prefix}PROMPT')
+                if env_prompt and env_prompt.strip():
+                    self.system_prompt = env_prompt.strip()
+                else:
+                    self.system_prompt = None
             
             # 页面问答专用参数
             self.max_tokens = int(os.getenv(f'{prefix}MAX_TOKENS', '4096'))
@@ -110,10 +128,11 @@ class AIService:
             if not self.is_configured():
                 return "AI服务未配置，无法提供智能回复"
             
-            # 构建完整的消息列表
-            full_messages = [
-                {"role": "system", "content": self.system_prompt}
-            ] + messages
+            # 构建完整的消息列表：仅当 system_prompt 非空时才添加 system 消息
+            full_messages = []
+            if self.system_prompt:
+                full_messages.append({"role": "system", "content": self.system_prompt})
+            full_messages += messages
             
             # 验证消息格式
             for msg in full_messages:
@@ -263,9 +282,11 @@ class AIService:
             messages = conversation_history or []
             messages.append({"role": "user", "content": user_message})
             
-            full_messages = [
-                {"role": "system", "content": self.system_prompt}
-            ] + messages
+            # 仅当 system_prompt 非空时才添加 system 消息
+            full_messages = []
+            if self.system_prompt:
+                full_messages.append({"role": "system", "content": self.system_prompt})
+            full_messages += messages
             
             # 验证消息格式
             for msg in full_messages:
@@ -352,7 +373,11 @@ class AIService:
                 if "model" in config and not self.model:
                     self.model = config["model"]
                 if "system_prompt" in config and not self.system_prompt:
-                    self.system_prompt = config["system_prompt"]
+                    cfg_prompt = config["system_prompt"]
+                    if cfg_prompt and cfg_prompt.strip():
+                        self.system_prompt = cfg_prompt.strip()
+                    else:
+                        self.system_prompt = None
                 if "max_tokens" in config:
                     self.max_tokens = config["max_tokens"]
                 if "temperature" in config:
@@ -385,7 +410,8 @@ class AIService:
             self.api_url = api_url
             self.api_key = api_key
             self.model = model
-            self.system_prompt = system_prompt
+            # 对 system_prompt 归一化：空或仅空白时设为 None
+            self.system_prompt = system_prompt.strip() if system_prompt and system_prompt.strip() else None
             self.max_tokens = max_tokens
             self.temperature = temperature
             self.timeout = timeout
@@ -397,7 +423,7 @@ class AIService:
             config_data = {
                 "api_url": api_url,
                 "model": model,
-                "system_prompt": system_prompt,
+                "system_prompt": self.system_prompt,  # 使用归一化后的值（空/空白→None）
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "timeout": timeout
